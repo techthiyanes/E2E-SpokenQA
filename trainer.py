@@ -31,11 +31,13 @@ class trainer():
         os.makedirs(self.logdir, exist_ok=True)
         
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    
-    def fetch_data(self, batch, device):
-        for data in batch: 
-            data = data.to(device)
-        return batch
+        self.extracter = torch.hub.load('s3prl/s3prl', self.paras.upstream, 
+            feature_selection=self.config['data']['feature_selection']).to(device)
+
+    def to_device(self, data):
+        for f in data: 
+            f = f.to(self.device)
+        return data
 
     def load_data(self):
         
@@ -59,24 +61,62 @@ class trainer():
             self.train_dataset, 
             batch_size=self.config['hparas']['batch_size'], 
             shuffle=True, 
-            collate_fn=collate_fn
+            collate_fn=collate_fn, 
+            num_workers=self.paras.n_worker
         )
         self.dev_loader = DataLoader(
             self.dev_dataset, 
             batch_size=1, 
             shuffle=False, 
-            collate_fn=collate_fn
+            collate_fn=collate_fn,
+            num_workers=self.paras.n_worker
         )
+    
+    def prepare_data(self, data):
+        question_wavs, context_wavs, start_positions, end_positions = self.to_device(data)
+        self.extracter.to(self.device)
+
+
+        with torch.no_grad():
+            question_feature = self.extracter(question_wavs)
+            content_feature = self.extracter(context_wavs)
+            question_feature = question_feature['default'][0]
+            content_feature = context_feature['default'][0] 
+        
+        def preprocess_qa(question_feature, context_feature):
+            q_len = question_feature.size(0)
+            c_len = context_feature.size(0)
+            segment_ids = torch.zeros(q_len + c_len, dtype=torch.long)
+            segment_ids[q_len:] = 1
+            position_ids = torch.arange(q_len + c_len, dtype=torch.long)
+            qa_pair_feat = torch.cat((question_feature, context_feature), dim=0)
+            
+            return qa_pair_feat, segment_ids, position_ids
+
+        qa_pair_feats, segment_ids, position_ids = preprocess_qa(question_feature, context_feature)
+        src_key_padding_mask = torch.ones(segment_ids.size(), dtype=torch.bool)
+        # padding batch
+        qa_pair_feats = pad_sequence(qa_pair_feats, batch_first=True, padding_value=0) 
+        src_key_padding_mask = ~pad_sequence(src_key_padding_mask, batch_first=True, padding_value=0)
+        segment_ids = pad_sequence(segment_ids, batch_first=True, padding_value=0) 
+        position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0) 
+        start_positions = torch.tensor(list(start_positions), dtype=torch.long)
+        end_positions = torch.tensor(list(end_positions), dtype=torch.long)
+
+        return feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions
+
 
     def set_model(self):
         self.model = TransformerQA(**self.config['model'])
         self.model.to(self.device)
         print(self.model)
 
+
         self.optim = eval('torch.optim.' + self.config['hparas']['optimizer'])(
                         self.model.parameters(), 
                         lr=float(self.config['hparas']['lr'])
                     )
+    
     def exec(self):
         best_F1_score = 0.0
         best_AOS_score = 0.0
@@ -87,7 +127,7 @@ class trainer():
             self.model.train()
             for batch_idx, batch in enumerate(self.train_loader):
                 self.optim.zero_grad()
-                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.fetch_data(batch, self.device)
+                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch)
 
                 loss, start_logits, end_logits = self.model(
                     feat_embs=feat, 
@@ -119,7 +159,7 @@ class trainer():
             dev_Frame_F1_scores, dev_AOS_scores = [], []
 
             for i, data in enumerate(self.dev_loader):
-                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.fetch_data(data, self.device)
+                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch)
                 
                 with torch.no_grad():
                     loss, start_logits, end_logits = self.model(

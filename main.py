@@ -20,7 +20,7 @@ parser.add_argument(
 paras = parser.parse_args()
 config = yaml.load(open(paras.config,'r'), Loader=yaml.FullLoader)
 
-wandb.init(project='SpokenQA', entity='daniel091444', name=paras.name)
+wandb.init(project='SpokenQA', entity='daniel091444', name=paras.name, config=config)
 
 trainer = trainer(config, paras)
 trainer.load_data()
