@@ -11,6 +11,7 @@ from data import SpokenSquadDataset, collate_fn
 from utils import Frame_F1_score, AOS_score
 from tqdm import tqdm
 from torch.nn.functional import softmax
+from torch.nn.utils.rnn import pad_sequence
 import os
 import wandb
 
@@ -21,6 +22,7 @@ class trainer():
         self.n_epoch = self.config['hparas']['n_epoch']
         self.exp_name = paras.name
         self.log_interval = self.paras.log_interval
+        self.batch_size = self.config['hparas']['batch_size']
 
         os.makedirs(paras.ckptdir, exist_ok=True)
         self.ckptdir = os.path.join(paras.ckptdir,self.exp_name)
@@ -32,12 +34,10 @@ class trainer():
         
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.extracter = torch.hub.load('s3prl/s3prl', self.paras.upstream, 
-            feature_selection=self.config['data']['feature_selection']).to(device)
+            feature_selection=self.config['data']['feature_selection']).to(self.device)
 
-    def to_device(self, data):
-        for f in data: 
-            f = f.to(self.device)
-        return data
+    def to_device(self, feat):
+        return [f.to(self.device) for f in feat]
 
     def load_data(self):
         
@@ -59,7 +59,7 @@ class trainer():
 
         self.train_loader = DataLoader(
             self.train_dataset, 
-            batch_size=self.config['hparas']['batch_size'], 
+            batch_size=self.batch_size, 
             shuffle=True, 
             collate_fn=collate_fn, 
             num_workers=self.paras.n_worker
@@ -73,15 +73,18 @@ class trainer():
         )
     
     def prepare_data(self, data):
-        question_wavs, context_wavs, start_positions, end_positions = self.to_device(data)
+        question_wavs, context_wavs, start_positions, end_positions = data
+        question_wavs = self.to_device(question_wavs)
+        context_wavs = self.to_device(context_wavs)
         self.extracter.to(self.device)
 
 
         with torch.no_grad():
+            self.extracter.eval()
             question_feature = self.extracter(question_wavs)
-            content_feature = self.extracter(context_wavs)
-            question_feature = question_feature['default'][0]
-            content_feature = context_feature['default'][0] 
+            context_feature = self.extracter(context_wavs)
+            question_feature = question_feature['default']
+            context_feature = context_feature['default']
         
         def preprocess_qa(question_feature, context_feature):
             q_len = question_feature.size(0)
@@ -93,17 +96,24 @@ class trainer():
             
             return qa_pair_feat, segment_ids, position_ids
 
-        qa_pair_feats, segment_ids, position_ids = preprocess_qa(question_feature, context_feature)
-        src_key_padding_mask = torch.ones(segment_ids.size(), dtype=torch.bool)
+        qa_pair_feats, segment_ids, position_ids, src_key_padding_masks = [], [], [], []
+        for i in range(len(question_feature)):
+            qa_pair_feat, segment_id, position_id = preprocess_qa(question_feature[i], context_feature[i])
+            src_key_padding_mask = torch.ones(segment_id.size(), dtype=torch.bool)
+            qa_pair_feats.append(qa_pair_feat)
+            segment_ids.append(segment_id)
+            position_ids.append(position_id)
+            src_key_padding_masks.append(src_key_padding_mask)
+            
         # padding batch
         qa_pair_feats = pad_sequence(qa_pair_feats, batch_first=True, padding_value=0) 
-        src_key_padding_mask = ~pad_sequence(src_key_padding_mask, batch_first=True, padding_value=0)
+        src_key_padding_masks = ~pad_sequence(src_key_padding_masks, batch_first=True, padding_value=0)
         segment_ids = pad_sequence(segment_ids, batch_first=True, padding_value=0) 
         position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0) 
         start_positions = torch.tensor(list(start_positions), dtype=torch.long)
         end_positions = torch.tensor(list(end_positions), dtype=torch.long)
 
-        return feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions
+        return qa_pair_feats, src_key_padding_masks, segment_ids, position_ids, start_positions, end_positions
 
 
     def set_model(self):
