@@ -6,13 +6,13 @@ Created on Aug 26 2021
 import torch
 
 from torch.utils.data import DataLoader
-from transformers import AdamW
 from model import TransformerQA
 from data import SpokenSquadDataset, collate_fn
 from utils import Frame_F1_score, AOS_score
 from tqdm import tqdm
 from torch.nn.functional import softmax
 import os
+import wandb
 
 class trainer():
     def __init__(self, config, paras):
@@ -20,10 +20,15 @@ class trainer():
         self.paras = paras
         self.n_epoch = self.config['hparas']['n_epoch']
         self.exp_name = paras.name
+        self.log_interval = self.paras.log_interval
 
         os.makedirs(paras.ckptdir, exist_ok=True)
         self.ckptdir = os.path.join(paras.ckptdir,self.exp_name)
         os.makedirs(self.ckptdir, exist_ok=True)
+
+        os.makedirs(paras.logdir, exist_ok=True)
+        self.logdir = os.path.join(paras.logdir,self.exp_name)
+        os.makedirs(self.logdir, exist_ok=True)
         
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     
@@ -36,14 +41,19 @@ class trainer():
         
         self.train_dataset = SpokenSquadDataset(
             self.paras.upstream,
+            self.paras.n_worker,
             self.device, 
+            self.config['split'][0],
             **self.config['data']
         )
         self.dev_dataset = SpokenSquadDataset(
             self.paras.upstream,
+            self.paras.n_worker,
             self.device, 
+            self.config['split'][1],
             **self.config['data']
         )
+        print('here')
 
         self.train_loader = DataLoader(
             self.train_dataset, 
@@ -71,10 +81,11 @@ class trainer():
         best_F1_score = 0.0
         best_AOS_score = 0.0
 
+        wandb.watch(self.model)
         for epoch in tqdm(range(self.n_epoch), desc='epoch'):
             # training
             self.model.train()
-            for batch in self.train_loader:
+            for batch_idx, batch in enumerate(self.train_loader):
                 self.optim.zero_grad()
                 feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.fetch_data(batch, self.device)
 
@@ -88,8 +99,7 @@ class trainer():
                 )
                 loss.backward()
                 self.optim.step()
-                
-                # TODO: logger
+            
                 pred_start_prob = softmax(start_logits, dim=1)
                 pred_end_prob = softmax(end_logits, dim=1)
                 pred_start_positions = torch.argmax(pred_start_prob, dim=1)
@@ -97,7 +107,13 @@ class trainer():
 
                 F1 = Frame_F1_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
                 AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-            
+
+                # TODO: logger
+                if batch_idx % self.log_interval == 0:
+                    wandb.log({'train_loss': loss})
+                    wandb.log({'train_f1': F1})
+                    wandb.log({'train_AOS': AOS})
+
             # inference
             self.model.eval()
             dev_Frame_F1_scores, dev_AOS_scores = [], []
@@ -131,6 +147,9 @@ class trainer():
             dev_Frame_F1_score = sum(dev_Frame_F1_scores) / len(dev_Frame_F1_scores)
             dev_AOS_score = sum(dev_AOS_scores) / len(dev_AOS_scores)
             
+            wandb.log({'dev_f1': dev_Frame_F1_score})
+            wandb.log({'dev_AOS': dev_AOS_score})
+
             # save ckpt if get better score
             if dev_Frame_F1_score > best_F1_score: 
                 ckpt_path = os.path.join(self.ckptdir, 'best_F1_score.pt')
