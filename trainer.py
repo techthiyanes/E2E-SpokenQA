@@ -170,6 +170,7 @@ class trainer():
                     wandb.log({'train_loss': loss})
                     wandb.log({'train_f1': F1})
                     wandb.log({'train_AOS': AOS})
+                    print(f'[INFO]  train_loss: {loss}, train_f1: {F1}, train_AOS: {AOS}')
 
             # inference
             self.model.eval()

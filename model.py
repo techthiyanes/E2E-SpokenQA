@@ -15,13 +15,14 @@ class TransformerQA(nn.Module):
 
     def __init__(self, hidden_size: int=768, num_attention_heads: int=4,
                  nlayers: int=6, hidden_dropout_prob: float=0.1, intermediate_size: int=2048, 
-                 hidden_act: str='gelu', layer_norm_eps=1e-12, num_labels: int=2):
+                 hidden_act: str='gelu', layer_norm_eps=1e-12, num_labels: int=2, 
+                 max_position_embeddings: int=8000, segment_type_size: int=2):
         super().__init__()
         layer_norm_eps = float(layer_norm_eps)
         
         self.embedding = ExtraEncoding(
-                max_position_embeddings=2000, 
-                segment_type_size=2, 
+                max_position_embeddings=max_position_embeddings, 
+                segment_type_size=segment_type_size, 
                 hidden_size=hidden_size, 
                 hidden_dropout_prob=hidden_dropout_prob, 
                 layer_norm_eps=layer_norm_eps)
@@ -69,7 +70,7 @@ class TransformerQA(nn.Module):
 # add segment emb + positional emb
 class ExtraEncoding(nn.Module):
     def __init__(self, 
-                max_position_embeddings=2000, 
+                max_position_embeddings=10000, 
                 segment_type_size=2, 
                 hidden_size=768, 
                 hidden_dropout_prob=0.1, 
@@ -97,6 +98,7 @@ class ExtraEncoding(nn.Module):
         segment_embeddings = self.segment_embeddings(segment_ids)
         embeddings = feat_embs + segment_embeddings
         position_embeddings = self.position_embeddings(position_ids)
+     
         embeddings += position_embeddings
 
         embeddings = self.LayerNorm(embeddings)
