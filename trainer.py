@@ -113,7 +113,14 @@ class trainer():
         start_positions = torch.tensor(list(start_positions), dtype=torch.long)
         end_positions = torch.tensor(list(end_positions), dtype=torch.long)
 
-        return qa_pair_feats, src_key_padding_masks, segment_ids, position_ids, start_positions, end_positions
+        return (
+            qa_pair_feats, 
+            src_key_padding_masks.to(self.device), 
+            segment_ids.to(self.device), 
+            position_ids.to(self.device), 
+            start_positions.to(self.device), 
+            end_positions.to(self.device)
+        )
 
 
     def set_model(self):
