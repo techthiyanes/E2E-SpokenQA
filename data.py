@@ -45,14 +45,18 @@ class SpokenSquadDataset(Dataset):
 
     def read_file(self, file_path, hash2question_path):
         df = pd.read_csv(file_path)
-        # remove duplicate answer in dev set
-        if self.mode == 'dev':
-            dup = df.duplicated(subset=['hash']) & df.duplicated(subset=['utterance'])
-            drop_idx = []
-            for i in range(len(dup)):
-                if dup[i]: 
-                    drop_idx.append(i)
-            df = df.drop(drop_idx)
+        # remove duplicate answer 
+        dup = df.duplicated(subset=['hash']) & df.duplicated(subset=['utterance'])
+        dup = dup.values
+        too_long = df['end'].values >= 25.0
+        union = dup | too_long
+        drop_idx = []
+        for i in range(len(union)):
+            if union[i]: 
+                drop_idx.append(i)
+
+        print(f'[INFO]  drop {len(drop_idx)} samples due to duplicated or too long')
+        df = df.drop(drop_idx)
 
         with open(hash2question_path, 'r') as f:
             h2q = json.load(f)

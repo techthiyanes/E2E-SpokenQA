@@ -35,6 +35,8 @@ class trainer():
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         self.extracter = torch.hub.load('s3prl/s3prl', self.paras.upstream, 
             feature_selection=self.config['data']['feature_selection']).to(self.device)
+        self.extracter.to(self.device)
+        self.extracter.eval()
 
     def to_device(self, feat):
         return [f.to(self.device) for f in feat]
@@ -55,7 +57,6 @@ class trainer():
             self.config['split'][1],
             **self.config['data']
         )
-        print('here')
 
         self.train_loader = DataLoader(
             self.train_dataset, 
@@ -76,29 +77,29 @@ class trainer():
         question_wavs, context_wavs, start_positions, end_positions = data
         question_wavs = self.to_device(question_wavs)
         context_wavs = self.to_device(context_wavs)
-        self.extracter.to(self.device)
 
-
-        with torch.no_grad():
-            self.extracter.eval()
-            question_feature = self.extracter(question_wavs)
-            context_feature = self.extracter(context_wavs)
-            question_feature = question_feature['default']
-            context_feature = context_feature['default']
         
+        
+
         def preprocess_qa(question_feature, context_feature):
             q_len = question_feature.size(0)
             c_len = context_feature.size(0)
-            segment_ids = torch.zeros(q_len + c_len, dtype=torch.long)
-            segment_ids[q_len:] = 1
-            position_ids = torch.arange(q_len + c_len, dtype=torch.long)
-            qa_pair_feat = torch.cat((question_feature, context_feature), dim=0)
+            segment_ids = torch.zeros(c_len + q_len, dtype=torch.long)
+            segment_ids[c_len:] = 1
+            position_ids = torch.arange(c_len + q_len, dtype=torch.long)
+            qa_pair_feat = torch.cat((context_feature, question_feature), dim=0)
             
             return qa_pair_feat, segment_ids, position_ids
 
         qa_pair_feats, segment_ids, position_ids, src_key_padding_masks = [], [], [], []
-        for i in range(len(question_feature)):
-            qa_pair_feat, segment_id, position_id = preprocess_qa(question_feature[i], context_feature[i])
+        for i in range(len(question_wavs)):
+            with torch.no_grad():
+                question_feature = self.extracter([question_wavs[i]])
+                context_feature = self.extracter([context_wavs[i]])
+                question_feature = question_feature['default'][0]
+                context_feature = context_feature['default'][0]
+
+            qa_pair_feat, segment_id, position_id = preprocess_qa(question_feature, context_feature)
             src_key_padding_mask = torch.ones(segment_id.size(), dtype=torch.bool)
             qa_pair_feats.append(qa_pair_feat)
             segment_ids.append(segment_id)
@@ -164,13 +165,16 @@ class trainer():
 
                 F1 = Frame_F1_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
                 AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-
+                
+                
                 # TODO: logger
                 if batch_idx % self.log_interval == 0:
                     wandb.log({'train_loss': loss})
                     wandb.log({'train_f1': F1})
                     wandb.log({'train_AOS': AOS})
                     print(f'[INFO]  train_loss: {loss}, train_f1: {F1}, train_AOS: {AOS}')
+                del feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions
+                del loss, start_logits, end_logits
 
             # inference
             self.model.eval()
