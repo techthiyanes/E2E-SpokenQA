@@ -81,17 +81,24 @@ class trainer():
         
         
 
-        def preprocess_qa(question_feature, context_feature):
+        def preprocess_qa(question_feature, context_feature, start_positions, end_positions):
             q_len = question_feature.size(0)
             c_len = context_feature.size(0)
-            segment_ids = torch.zeros(c_len + q_len, dtype=torch.long)
-            segment_ids[c_len:] = 1
-            position_ids = torch.arange(c_len + q_len, dtype=torch.long)
-            qa_pair_feat = torch.cat((context_feature, question_feature), dim=0)
+            join_len = c_len + q_len
+            if join_len > 3000:
+                print(f'[INFO]   discard len { c_len + q_len}')
+                join_len = 3000
             
-            return qa_pair_feat, segment_ids, position_ids
+            segment_ids = torch.zeros(join_len, dtype=torch.long)
+            segment_ids[q_len:] = 1
+            position_ids = torch.arange(join_len, dtype=torch.long)
+            qa_pair_feat = torch.cat((question_feature, context_feature[:join_len - q_len]), dim=0)
+            start_positions += q_len
+            end_positions += q_len
+            
+            return qa_pair_feat, segment_ids, position_ids, start_positions, end_positions
 
-        qa_pair_feats, segment_ids, position_ids, src_key_padding_masks = [], [], [], []
+        qa_pair_feats, segment_ids, position_ids, src_key_padding_masks, new_start_positions, new_end_positions = [], [], [], [], [], []
         for i in range(len(question_wavs)):
             with torch.no_grad():
                 question_feature = self.extracter([question_wavs[i]])
@@ -99,35 +106,37 @@ class trainer():
                 question_feature = question_feature['default'][0]
                 context_feature = context_feature['default'][0]
 
-            qa_pair_feat, segment_id, position_id = preprocess_qa(question_feature, context_feature)
+            qa_pair_feat, segment_id, position_id, start_position, end_position = preprocess_qa(question_feature, context_feature, start_positions[i], end_positions[i])
             src_key_padding_mask = torch.ones(segment_id.size(), dtype=torch.bool)
             qa_pair_feats.append(qa_pair_feat)
             segment_ids.append(segment_id)
             position_ids.append(position_id)
             src_key_padding_masks.append(src_key_padding_mask)
+            new_start_positions.append(start_position)
+            new_end_positions.append(end_position)
             
         # padding batch
         qa_pair_feats = pad_sequence(qa_pair_feats, batch_first=True, padding_value=0) 
         src_key_padding_masks = ~pad_sequence(src_key_padding_masks, batch_first=True, padding_value=0)
         segment_ids = pad_sequence(segment_ids, batch_first=True, padding_value=0) 
         position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0) 
-        start_positions = torch.tensor(list(start_positions), dtype=torch.long)
-        end_positions = torch.tensor(list(end_positions), dtype=torch.long)
+        new_start_positions = torch.tensor(new_start_positions, dtype=torch.long)
+        new_end_positions = torch.tensor(new_end_positions, dtype=torch.long)
 
         return (
-            qa_pair_feats, 
+            qa_pair_feats.to(self.device), 
             src_key_padding_masks.to(self.device), 
             segment_ids.to(self.device), 
             position_ids.to(self.device), 
-            start_positions.to(self.device), 
-            end_positions.to(self.device)
+            new_start_positions.to(self.device), 
+            new_end_positions.to(self.device)
         )
 
 
     def set_model(self):
         self.model = TransformerQA(**self.config['model'])
         self.model.to(self.device)
-        print(self.model)
+        # print(self.model)
 
 
         self.optim = eval('torch.optim.' + self.config['hparas']['optimizer'])(

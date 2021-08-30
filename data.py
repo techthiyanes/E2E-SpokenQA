@@ -110,9 +110,10 @@ class SpokenSquadDataset(Dataset):
 def collate_fn(batch):
     question_list, context_list, start_idx, end_idx = zip(*batch)
     question_wavs, context_wavs = [], []
-    for i in range(len(question_list)):           
-        question_wavs.append(reader(question_list[i]))
-        context_wavs.append(reader(context_list[i]))
-
+    # for i in range(len(question_list)):           
+    #     question_wavs.append(reader(question_list[i]))
+    #     context_wavs.append(reader(context_list[i]))
+    question_wavs = [reader(question_file) for question_file in question_list]
+    context_wavs = [reader(context_file) for context_file in context_list]
     return question_wavs, context_wavs, start_idx, end_idx
 
