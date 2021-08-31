@@ -36,10 +36,12 @@ class TransformerQA(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
         self.start_logits = PoolerStartLogits(hidden_size)
         self.end_logits = PoolerEndLogits(hidden_size)
+        self.start_n_top = 4
+        self.end_n_top = 4
 
         # TODO: init_weight
 
-    def forward(self, feat_embs, position_ids, segment_ids, src_key_padding_mask, start_positions, end_positions):
+    def forward(self, feat_embs, position_ids, segment_ids, src_key_padding_mask, start_positions=None, end_positions=None):
         """
         Args:
 
@@ -86,9 +88,8 @@ class TransformerQA(nn.Module):
             start_states = torch.gather(hidden_states, -2, start_top_index_exp)  # shape (bsz, start_n_top, hsz)
             start_states = start_states.unsqueeze(1).expand(-1, slen, -1, -1)  # shape (bsz, slen, start_n_top, hsz)
 
-            hidden_states_expanded = hidden_states.unsqueeze(2).expand_as(
-                start_states
-            )  # shape (bsz, slen, start_n_top, hsz)
+            hidden_states_expanded = hidden_states.unsqueeze(2).expand_as(start_states)
+            # shape (bsz, slen, start_n_top, hsz)
             p_mask = p_mask.unsqueeze(-1) if p_mask is not None else None
             end_logits = self.end_logits(hidden_states_expanded, start_states=start_states, p_mask=p_mask)
             end_log_probs = nn.functional.softmax(end_logits, dim=1)  # shape (bsz, slen, start_n_top)

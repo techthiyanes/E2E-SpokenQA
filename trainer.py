@@ -23,6 +23,7 @@ class trainer():
         self.n_epoch = self.config['hparas']['n_epoch']
         self.exp_name = paras.name
         self.log_interval = self.paras.log_interval
+        self.valid_interval = self.paras.valid_interval
         self.batch_size = self.config['hparas']['batch_size']
 
         os.makedirs(paras.ckptdir, exist_ok=True)
@@ -70,7 +71,7 @@ class trainer():
         )
         self.dev_loader = DataLoader(
             self.dev_dataset, 
-            batch_size=1, 
+            batch_size=1,
             shuffle=False, 
             collate_fn=collate_fn,
             num_workers=self.paras.n_worker
@@ -108,7 +109,7 @@ class trainer():
                 question_feature = question_feature['default'][0]
                 context_feature = context_feature['default'][0]
 
-            # TODO: downsampling
+            # downsampling
             if self.downsample_factor is not None: 
                 question_feature = question_feature[::self.downsample_factor]
                 context_feature = context_feature[::self.downsample_factor]
@@ -152,14 +153,16 @@ class trainer():
                     )
     
     def exec(self):
-        best_F1_score = 0.0
-        best_AOS_score = 0.0
+        self.step = 0
+        self.best_F1_score = 0.0
+        self.best_AOS_score = 0.0
 
         wandb.watch(self.model)
         for epoch in tqdm(range(self.n_epoch), desc='epoch'):
             # training
             self.model.train()
             for batch_idx, batch in enumerate(self.train_loader):
+                
                 self.optim.zero_grad()
                 feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch)
 
@@ -193,68 +196,71 @@ class trainer():
                 del feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions
                 del loss, start_logits, end_logits
 
-            # inference
-            self.model.eval()
-            dev_Frame_F1_scores, dev_AOS_scores = [], []
-
-            for i, data in enumerate(self.dev_loader):
-                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch)
+                if self.step % self.valid_interval == 0 & self.step != 0:
+                    # validation
+                    self.validate()
                 
-                with torch.no_grad():
-                    loss, start_logits, end_logits = self.model(
-                    feat_embs=feat, 
-                    position_ids=position_ids,
-                    segment_ids=segment_ids, 
-                    src_key_padding_mask=src_key_padding_mask,
-                    start_positions=start_positions,
-                    end_positions=end_positions
-                    )
-                
-                
-                # TODO: logger
-                pred_start_prob = softmax(start_logits, dim=1)
-                pred_end_prob = softmax(end_logits, dim=1)
-                pred_start_positions = torch.argmax(pred_start_prob, dim=1)
-                pred_end_positions = torch.argmax(pred_end_prob, dim=1)
+                self.step  = self.step + 1
+        
+        print(f'[INFO]   Best F1 score: {self.best_F1_score}')
+        print(f'[INFO]   Best AOS score: {self.best_AOS_score}')
 
-                F1 = Frame_F1_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-                AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
 
-                dev_Frame_F1_scores.append(F1)
-                dev_AOS_scores.append(AOS)
+
+    def validate(self): 
+        self.model.eval()
+        dev_Frame_F1_scores, dev_AOS_scores = [], []
+        print(f'[INFO]   validation at step {self.step}')
+        for i, data in tqdm(enumerate(self.dev_loader)):
+            feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(data)
             
-            dev_Frame_F1_score = sum(dev_Frame_F1_scores) / len(dev_Frame_F1_scores)
-            dev_AOS_score = sum(dev_AOS_scores) / len(dev_AOS_scores)
+            with torch.no_grad():
+                start_top_log_probs, start_top_index, end_top_log_probs, end_top_index = self.model(
+                feat_embs=feat, 
+                position_ids=position_ids,
+                segment_ids=segment_ids, 
+                src_key_padding_mask=src_key_padding_mask,
+                )
             
-            wandb.log({'dev_f1': dev_Frame_F1_score})
-            wandb.log({'dev_AOS': dev_AOS_score})
+            pred_start_positions = start_top_index[:, 0]
+            pred_end_positions = end_top_index[:, 0]
+            F1 = Frame_F1_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
+            AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
+            dev_Frame_F1_scores.append(F1)
+            dev_AOS_scores.append(AOS)
+        
+        dev_Frame_F1_score = sum(dev_Frame_F1_scores) / len(dev_Frame_F1_scores)
+        dev_AOS_score = sum(dev_AOS_scores) / len(dev_AOS_scores)
+        
+        wandb.log({'dev_f1': dev_Frame_F1_score})
+        wandb.log({'dev_AOS': dev_AOS_score})
+        print(f'[INFO]  dev_f1: {dev_Frame_F1_score}, dev_AOS: {dev_AOS_score}')
 
-            # save ckpt if get better score
-            if dev_Frame_F1_score > best_F1_score: 
-                ckpt_path = os.path.join(self.ckptdir, 'best_F1_score.pt')
-                full_dict = {
-                    'model': self.model.state_dict(),
-                    'optimizer': self.optim.state_dict(),
-                    'epoch': epoch,
-                    'f1_score': dev_Frame_F1_score,
-                    'AOS_score':dev_AOS_score
-                }
-                torch.save(full_dict, ckpt_path)
-                best_F1_score = dev_Frame_F1_score
-            
-            if dev_AOS_score > best_AOS_score: 
-                ckpt_path = os.path.join(self.ckptdir, 'best_AOS_score.pt')
-                full_dict = {
-                    'model': self.model.state_dict(),
-                    'optimizer': self.optim.state_dict(),
-                    'epoch': epoch,
-                    'f1_score': dev_Frame_F1_score,
-                    'AOS_score':dev_AOS_score
-                }
-                torch.save(full_dict, ckpt_path)
-                best_AOS_score = dev_AOS_score
+        # save ckpt if get better score
+        if dev_Frame_F1_score > self.best_F1_score: 
+            ckpt_path = os.path.join(self.ckptdir, 'best_F1_score.pt')
+            full_dict = {
+                'model': self.model.state_dict(),
+                'optimizer': self.optim.state_dict(),
+                'epoch': epoch,
+                'f1_score': dev_Frame_F1_score,
+                'AOS_score':dev_AOS_score
+            }
+            torch.save(full_dict, ckpt_path)
+            self.best_F1_score = dev_Frame_F1_score
+        
+        if dev_AOS_score > self.best_AOS_score: 
+            ckpt_path = os.path.join(self.ckptdir, 'best_AOS_score.pt')
+            full_dict = {
+                'model': self.model.state_dict(),
+                'optimizer': self.optim.state_dict(),
+                'epoch': epoch,
+                'f1_score': dev_Frame_F1_score,
+                'AOS_score':dev_AOS_score
+            }
+            torch.save(full_dict, ckpt_path)
+            self.best_AOS_score = dev_AOS_score
 
-        print(f'[INFO]   Best F1 score: {best_F1_score}')
-        print(f'[INFO]   Best AOS score: {best_AOS_score}')
+
 
 
