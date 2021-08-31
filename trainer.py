@@ -6,7 +6,8 @@ Created on Aug 26 2021
 import torch
 
 from torch.utils.data import DataLoader
-from model import TransformerQA
+# from model import TransformerQA
+from model_xlent import TransformerQA
 from data import SpokenSquadDataset, collate_fn
 from utils import Frame_F1_score, AOS_score
 from tqdm import tqdm
