@@ -33,10 +33,7 @@ class PoolerStartLogits(nn.Module):
         x = self.dense(hidden_states).squeeze(-1)
 
         if p_mask is not None:
-            if get_parameter_dtype(self) == torch.float16:
-                x = x * (1 - p_mask) - 65500 * p_mask
-            else:
-                x = x * (1 - p_mask) - 1e30 * p_mask
+            x = x * (1 - p_mask) - 1e30 * p_mask
 
         return x
 
@@ -96,10 +93,7 @@ class PoolerEndLogits(nn.Module):
         x = self.dense_1(x).squeeze(-1)
 
         if p_mask is not None:
-            if get_parameter_dtype(self) == torch.float16:
-                x = x * (1 - p_mask) - 65500 * p_mask
-            else:
-                x = x * (1 - p_mask) - 1e30 * p_mask
+            x = x * (1 - p_mask) - 1e30 * p_mask
 
         return x
 

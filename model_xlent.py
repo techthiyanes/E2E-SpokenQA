@@ -48,14 +48,26 @@ class TransformerQA(nn.Module):
         """
         output_emb = self.embedding(feat_embs, position_ids, segment_ids)
         hidden_states = self.transformer_encoder(output_emb, src_key_padding_mask=src_key_padding_mask)
-        
-        start_logits = self.start_logits(hidden_states)
+        # build p_mask
+        """
+        p_mask: the index that wouldn't contain answer span
+        including "segment_ids == 0", "src_key_padding_mask == 1"
+        """
+        question_idx = segment_ids == 0
+        padding_idx = src_key_padding_mask == 1
+        p_mask = (torch.logical_or(question_idx, padding_idx)).long()
+
+        start_logits = self.start_logits(hidden_states, p_mask=p_mask)
         
         if start_positions is not None and end_positions is not None:
             # during training, compute the end logits based on the ground truth of the start position
-            end_logits = self.end_logits(hidden_states, start_positions=start_positions)
+            end_logits = self.end_logits(hidden_states, start_positions=start_positions, p_mask=p_mask)
+            # sometimes the start/end positions are outside our model inputs, we ignore these terms
+            ignored_index = start_logits.size(1)
+            start_positions = start_positions.clamp(0, ignored_index)
+            end_positions = end_positions.clamp(0, ignored_index)
 
-            loss_fct = CrossEntropyLoss()
+            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
             start_loss = loss_fct(start_logits, start_positions)
             end_loss = loss_fct(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
