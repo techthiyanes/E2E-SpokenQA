@@ -27,7 +27,7 @@ def reader(fname):
 
 
 class SpokenSquadDataset(Dataset): 
-    def __init__(self, upstream: str, n_worker: int, device: str, mode: str, file_dir: str, file_path: str, hash2question_path: str, ext: str, feature_selection: int):
+    def __init__(self, upstream: str, n_worker: int, device: str, mode: str, file_dir: str, file_path: str, hash2question_path: str, ext: str, feature_selection: int, downsample_factor: int):
         self.mode = mode
         if self.mode == 'train':
             file_dir = file_dir[0]

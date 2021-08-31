@@ -38,6 +38,8 @@ class trainer():
             feature_selection=self.config['data']['feature_selection']).to(self.device)
         self.extracter.to(self.device)
         self.extracter.eval()
+        self.max_position_embeddings = self.config['model']['max_position_embeddings']
+        self.downsample_factor = self.config['data']['downsample_factor']
 
     def to_device(self, feat):
         return [f.to(self.device) for f in feat]
@@ -77,23 +79,22 @@ class trainer():
     def prepare_data(self, data):
         question_wavs, context_wavs, start_positions, end_positions = data
         question_wavs = self.to_device(question_wavs)
-        context_wavs = self.to_device(context_wavs)
-
-        
-        
+        context_wavs = self.to_device(context_wavs)    
 
         def preprocess_qa(question_feature, context_feature, start_positions, end_positions):
             q_len = question_feature.size(0)
             c_len = context_feature.size(0)
             join_len = c_len + q_len
-            if join_len > 3000:
+            if join_len > self.max_position_embeddings:
                 print(f'[INFO]   discard len { c_len + q_len}')
-                join_len = 3000
+                join_len = self.max_position_embeddings
             
             segment_ids = torch.zeros(join_len, dtype=torch.long)
             segment_ids[q_len:] = 1
             position_ids = torch.arange(join_len, dtype=torch.long)
             qa_pair_feat = torch.cat((question_feature, context_feature[:join_len - q_len]), dim=0)
+            start_positions = start_positions // self.downsample_factor
+            end_positions = end_positions // self.downsample_factor
             start_positions += q_len
             end_positions += q_len
             
@@ -106,6 +107,11 @@ class trainer():
                 context_feature = self.extracter([context_wavs[i]])
                 question_feature = question_feature['default'][0]
                 context_feature = context_feature['default'][0]
+
+            # TODO: downsampling
+            if self.downsample_factor is not None: 
+                question_feature = question_feature[::self.downsample_factor]
+                context_feature = context_feature[::self.downsample_factor]
 
             qa_pair_feat, segment_id, position_id, start_position, end_position = preprocess_qa(question_feature, context_feature, start_positions[i], end_positions[i])
             src_key_padding_mask = torch.ones(segment_id.size(), dtype=torch.bool)
@@ -179,7 +185,8 @@ class trainer():
                 
                 # TODO: logger
                 if batch_idx % self.log_interval == 0:
-                    wandb.log({'train_loss': loss})
+                    if loss < 1e10:
+                        wandb.log({'train_loss': loss})
                     wandb.log({'train_f1': F1})
                     wandb.log({'train_AOS': AOS})
                     print(f'[INFO]  train_loss: {loss}, train_f1: {F1}, train_AOS: {AOS}')
