@@ -69,10 +69,10 @@ class SpokenSquadTrainDataset(Dataset):
 
     def read_data(self, file_dir, file_path, hash2question_path, n_worker, ext='mp3', sr=16000):
         question_wavs, context_wavs = [], []
-        question_list, context_list, starts, ends, is_possible = self.read_file(file_path, hash2question_path)
+        question_list, context_list, starts, ends = self.read_file(file_path, hash2question_path)
 
         question_list = [file_dir + '/' + question_list[i] + '.' + ext for i in range(len(question_list))]
-        context_list = [file_dir + '/' + 'context-' + context_list[i] + '.' + ext for i in range(len(context_list))]
+        context_list = ['/home/daniel094144/Daniel/SpokenQA/train_passage_mp3' + '/' + 'context-' + context_list[i] + '.' + ext for i in range(len(context_list))]
 
         return(
             question_list,

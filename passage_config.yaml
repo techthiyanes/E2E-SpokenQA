@@ -1,15 +1,15 @@
 split: ['train', 'dev']  # either 'train' or other 
 data: 
-  file_dir: ['./train_passage_mp3', './dev_audios']
-  file_path: ['./train_ans_reduced.csv', './dev_ans_reduced.csv']
-  hash2question_path: ['./train-hash2question.json', './dev-hash2question.json']
+  file_dir: ['/home/daniel094144/Daniel/SpokenQA/train_audios', '/home/daniel094144/Daniel/SpokenQA/dev_audios']
+  file_path: ['/home/daniel094144/Daniel/SpokenQA/train_ans_reduced.csv', '/home/daniel094144/Daniel/SpokenQA/dev_ans_reduced.csv']
+  hash2question_path: ['/home/daniel094144/Daniel/SpokenQA/train-hash2question.json', '/home/daniel094144/Daniel/SpokenQA/dev-hash2question.json']
   ext: 'mp3'
   feature_selection: 12
   downsample_factor: 4
 
 hparas: 
   n_epoch: 20
-  batch_size: 32
+  batch_size: 4
   optimizer: 'AdamW'
   lr: 1e-4
 

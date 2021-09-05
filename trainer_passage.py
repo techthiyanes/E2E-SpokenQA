@@ -68,7 +68,7 @@ class trainer():
             self.train_dataset, 
             batch_size=self.batch_size, 
             shuffle=True, 
-            collate_fn=collate_fn, 
+            collate_fn=train_collate_fn, 
             num_workers=self.paras.n_worker
         )
         # self.dev_loader = DataLoader(
@@ -82,7 +82,7 @@ class trainer():
     def prepare_data(self, data):
         question_wavs, context_wavs, start_positions, end_positions = data
         question_wavs = self.to_device(question_wavs)
-        context_wavs = self.to_device(context_wavs)    
+        context_wavs = self.to_device(context_wavs)   
 
         def preprocess_qa(question_feature, context_feature, start_positions, end_positions):
             q_len = question_feature.size(0)
@@ -95,7 +95,7 @@ class trainer():
             segment_ids = torch.zeros(join_len, dtype=torch.long)
             segment_ids[q_len:] = 1
             position_ids = torch.arange(join_len, dtype=torch.long)
-            qa_pair_feat = torch.cat((question_feature, context_feature[:join_len - q_len]), dim=0)
+            qa_pair_feat = torch.cat([question_feature, context_feature[:join_len - q_len]], dim=0)
             start_positions = start_positions // self.downsample_factor
             end_positions = end_positions // self.downsample_factor
             start_positions += q_len
@@ -109,21 +109,19 @@ class trainer():
                 # TODO: check whether passage is too long extractor
                 # if so, chunk the input to same length and than feed to extractor as a batch?
                 # every 200000 data point a chunk, the remaining part would be extracted individually 
-                context_wavs_list = list(torch.split(context_wavs, CHUNK_LENGTH, dim=0))
-                context_wavs_list = context_wavs_list[:-1]
-                remain = context_wavs_list[-1]
-                
-                context_feature_main = self.extracter(context_wavs_list)
-                context_feature_remain = self.extracter([remain])
+                context_wavs_lists = list(torch.split(context_wavs[i], CHUNK_LENGTH, dim=0))
+                # context_wavs_list = context_wavs_lists[:-1]
+                # remain = context_wavs_lists[-1]
+                context_feature_main = self.extracter(context_wavs_lists)
+                # context_feature_remain = self.extracter([remain])
                 # concat
-                for idx, chunk in enumerate(context_feature_main):
+                for idx, chunk in enumerate(context_feature_main['default']):
                     if idx == 0: 
-                        context_feature = chunk['default'][0]
+                        context_feature = chunk
                     else: 
-                        context_feature = torch.cat([context_feature, chunk['default'][0]], dim=0)         
+                        context_feature = torch.cat([context_feature, chunk], dim=0)         
 
-                context_feature = torch.cat([context_feature, context_feature_remain['default'][0]], dim=0)         
-
+                # context_feature = torch.cat([context_feature, context_feature_remain['default'][0]], dim=0)         
                 question_feature = self.extracter([question_wavs[i]])
                 question_feature = question_feature['default'][0]
                 
