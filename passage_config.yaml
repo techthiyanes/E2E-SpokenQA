@@ -1,7 +1,7 @@
 split: ['train', 'dev']  # either 'train' or other 
 data: 
-  file_dir: ['./train_audios', './dev_audios']
-  file_path: ['./train-combine.csv', './dev-answer-span.csv']
+  file_dir: ['./train_passage_mp3', './dev_audios']
+  file_path: ['./train_ans_reduced.csv', './dev_ans_reduced.csv']
   hash2question_path: ['./train-hash2question.json', './dev-hash2question.json']
   ext: 'mp3'
   feature_selection: 12
@@ -22,6 +22,6 @@ model:
   hidden_act: 'gelu'
   layer_norm_eps: 1e-12
   num_labels: 2
-  max_position_embeddings: 1000
+  max_position_embeddings: 1250
   segment_type_size: 2
 

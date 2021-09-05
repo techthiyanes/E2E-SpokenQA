@@ -2,7 +2,9 @@ import torch
 import os
 import argparse
 import yaml
-from trainer import trainer
+# from trainer_binary import trainer
+# from trainer import trainer
+from trainer_passage import trainer
 import wandb
 
 parser = argparse.ArgumentParser(description='Training Spoken QA.')
@@ -21,7 +23,9 @@ parser.add_argument(
 paras = parser.parse_args()
 config = yaml.load(open(paras.config,'r'), Loader=yaml.FullLoader)
 
-wandb.init(project='SpokenQA', entity='daniel091444', name=paras.name, config=config)
+# wandb.init(project='SpokenQA', entity='daniel091444', name=paras.name, config=config)
+# wandb.init(project='binary_QA', entity='daniel091444', name=paras.name, config=config)
+wandb.init(project='passage_QA', entity='daniel091444', name=paras.name, config=config)
 
 trainer = trainer(config, paras)
 trainer.load_data()

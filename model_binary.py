@@ -10,13 +10,14 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn import CrossEntropyLoss
+from utils import PoolerStartLogits, PoolerEndLogits, PoolerAnswerClass
 
 class TransformerQA(nn.Module):
 
     def __init__(self, hidden_size: int=768, num_attention_heads: int=4,
-                 nlayers: int=6, hidden_dropout_prob: float=0.1, intermediate_size: int=2048, 
+                 nlayers: int=3, hidden_dropout_prob: float=0.1, intermediate_size: int=1024, 
                  hidden_act: str='gelu', layer_norm_eps=1e-12, num_labels: int=2, 
-                 max_position_embeddings: int=8000, segment_type_size: int=2):
+                 max_position_embeddings: int=1000, segment_type_size: int=2):
         super().__init__()
         layer_norm_eps = float(layer_norm_eps)
         
@@ -33,11 +34,15 @@ class TransformerQA(nn.Module):
 
         # TransformerEncoder is a stack of N encoder layers
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.qa_predictor = nn.Linear(hidden_size, num_labels)
+        # self.answer_class = PoolerAnswerClass(hidden_size)
+        self.dense_0 = nn.Linear(hidden_size, hidden_size)
+        self.activation = nn.Tanh()
+        self.dense_1 = nn.Linear(hidden_size, 1, bias=False)
+    
 
         # TODO: init_weight
 
-    def forward(self, feat_embs, position_ids, segment_ids, src_key_padding_mask, start_positions, end_positions, cls_index=None, is_possible=None):
+    def forward(self, feat_embs, position_ids, segment_ids, src_key_padding_mask, cls_index=None, is_possible=None):
         """
         Args:
 
@@ -45,29 +50,23 @@ class TransformerQA(nn.Module):
             
         """
         output_emb = self.embedding(feat_embs, position_ids, segment_ids)
-        encoder_output = self.transformer_encoder(output_emb, src_key_padding_mask=src_key_padding_mask)
-        logits = self.qa_predictor(encoder_output)
+        hidden_states = self.transformer_encoder(output_emb, src_key_padding_mask=src_key_padding_mask)
+      
+   
+        if cls_index is not None and is_possible is not None:
+            # Predict answerability from the representation of CLS and START
+            # cls_logits = self.answer_class(hidden_states, start_positions=start_positions, cls_index=cls_index)
+            output = self.dense_0(hidden_states[:, 0, :])
+            output = self.activation(output)
+            cls_logits = self.dense_1(output)
+            loss_fct_cls = nn.BCEWithLogitsLoss()
+            cls_logits = cls_logits.squeeze()
+            cls_loss = loss_fct_cls(cls_logits, is_possible)
 
-        # (B, T, 2) -> (B, T, 1) -> (B, T)
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1).contiguous()
-        end_logits = end_logits.squeeze(-1).contiguous()
-        weight = (is_possible + 1).detach()
-        total_loss = None
-        if start_positions is not None and end_positions is not None:
-            # sometimes the start/end positions are outside our model inputs, we ignore these terms
-            ignored_index = start_logits.size(1)
-            start_positions = start_positions.clamp(0, ignored_index)
-            end_positions = end_positions.clamp(0, ignored_index)
 
-            loss_fct = CrossEntropyLoss(ignore_index=ignored_index, reduction = 'none')
-            start_loss = loss_fct(start_logits, start_positions)
-            end_loss = loss_fct(end_logits, end_positions)
-            start_loss = torch.mean(start_loss * weight)
-            end_loss = torch.mean(end_loss * weight)
-            total_loss = 4 * start_loss + end_loss / 2
+            return cls_loss, cls_logits
 
-        return total_loss, start_logits, end_logits
+       
 
 # add segment emb + positional emb
 class ExtraEncoding(nn.Module):

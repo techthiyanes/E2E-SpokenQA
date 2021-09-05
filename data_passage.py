@@ -11,11 +11,9 @@ import json
 import torchaudio
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
-# from p_tqdm import p_map
-from multiprocessing import Pool
 
 SAMPLE_RATE = 16000
-
+MAX_LENGTH = 100.0
 
 def reader(fname):
     wav, ori_sr = torchaudio.load(fname)
@@ -38,7 +36,7 @@ class SpokenSquadTrainDataset(Dataset):
             file_path = file_path[1]
             hash2question_path = hash2question_path[1]
         
-        self.question_list, self.context_list, self.starts, self.ends, self.is_possible = self.read_data(
+        self.question_list, self.context_list, self.starts, self.ends = self.read_data(
             file_dir, file_path, hash2question_path, n_worker, ext
         )
 
@@ -48,14 +46,14 @@ class SpokenSquadTrainDataset(Dataset):
         # remove duplicate answer 
         dup = df.duplicated(subset=['hash']) & df.duplicated(subset=['utterance'])
         dup = dup.values
-        too_long = df['end'].values >= 50.0
+        too_long = df['new_end'].values >= MAX_LENGTH
         union = dup | too_long
         drop_idx = []
         for i in range(len(union)):
             if union[i]: 
                 drop_idx.append(i)
 
-        print(f'[INFO]  drop {len(drop_idx)} samples due to duplicated or too long')
+        print(f'[INFO]  drop {len(drop_idx)} samples due to duplicated or longer than {MAX_LENGTH}')
         df = df.drop(drop_idx)
 
         with open(hash2question_path, 'r') as f:
@@ -64,10 +62,9 @@ class SpokenSquadTrainDataset(Dataset):
         
         return(
             df['question'].values.tolist(),
-            df['utterance'].values.tolist(),
-            df['start'].values.tolist(),
-            df['end'].values.tolist(),
-            df['type'].values.tolist(),
+            df['context_id'].values.tolist(),
+            df['new_start'].values.tolist(),
+            df['new_end'].values.tolist(),
         )
 
     def read_data(self, file_dir, file_path, hash2question_path, n_worker, ext='mp3', sr=16000):
@@ -75,14 +72,13 @@ class SpokenSquadTrainDataset(Dataset):
         question_list, context_list, starts, ends, is_possible = self.read_file(file_path, hash2question_path)
 
         question_list = [file_dir + '/' + question_list[i] + '.' + ext for i in range(len(question_list))]
-        context_list = [file_dir + '/' + context_list[i] + '.' + ext for i in range(len(context_list))]
+        context_list = [file_dir + '/' + 'context-' + context_list[i] + '.' + ext for i in range(len(context_list))]
 
         return(
             question_list,
             context_list,
             starts,
             ends,
-            is_possible,
         )
 
     def sec2ind(self, time):
@@ -108,13 +104,13 @@ class SpokenSquadTrainDataset(Dataset):
             self.context_list[idx],
             self.sec2ind(self.starts[idx]),
             self.sec2ind(self.ends[idx]),
-            self.is_possible[idx],
         )
 
 def train_collate_fn(batch):
-    question_list, context_list, start_idx, end_idx, is_possible = zip(*batch)
+    question_list, context_list, start_idx, end_idx = zip(*batch)
     question_wavs, context_wavs = [], []
+    # TODO: mutliprocessing
     question_wavs = [reader(question_file) for question_file in question_list]
     context_wavs = [reader(context_file) for context_file in context_list]
-    return question_wavs, context_wavs, start_idx, end_idx, is_possible
+    return question_wavs, context_wavs, start_idx, end_idx
 

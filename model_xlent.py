@@ -10,7 +10,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.nn import CrossEntropyLoss
-from utils import PoolerStartLogits, PoolerEndLogits
+from utils import PoolerStartLogits, PoolerEndLogits, PoolerAnswerClass
 
 class TransformerQA(nn.Module):
 
@@ -44,7 +44,6 @@ class TransformerQA(nn.Module):
     def forward(self, feat_embs, position_ids, segment_ids, src_key_padding_mask, start_positions=None, end_positions=None):
         """
         Args:
-
         Returns:
             
         """

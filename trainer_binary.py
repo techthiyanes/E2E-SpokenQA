@@ -6,8 +6,8 @@ Created on Aug 26 2021
 import torch
 
 from torch.utils.data import DataLoader
-from model import TransformerQA
-# from model_xlent import TransformerQA
+# from model import TransformerQA
+from model_binary import TransformerQA
 from data import SpokenSquadTrainDataset, train_collate_fn
 from utils import Frame_F1_score, AOS_score
 from tqdm import tqdm
@@ -130,8 +130,6 @@ class trainer():
         src_key_padding_masks = ~pad_sequence(src_key_padding_masks, batch_first=True, padding_value=0)
         segment_ids = pad_sequence(segment_ids, batch_first=True, padding_value=0) 
         position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0) 
-        new_start_positions = torch.tensor(new_start_positions, dtype=torch.long)
-        new_end_positions = torch.tensor(new_end_positions, dtype=torch.long)
         is_possible = torch.tensor(list(is_possible))
         cls_index = torch.zeros(is_possible.size(), dtype=torch.long)
         return (
@@ -139,8 +137,6 @@ class trainer():
             src_key_padding_masks.to(self.device), 
             segment_ids.to(self.device), 
             position_ids.to(self.device), 
-            new_start_positions.to(self.device), 
-            new_end_positions.to(self.device),
             is_possible.to(self.device),
             cls_index.to(self.device),
         )
@@ -157,8 +153,8 @@ class trainer():
     
     def exec(self):
         self.step = 0
-        self.best_F1_score = 0.0
-        self.best_AOS_score = 0.0
+        # self.best_F1_score = 0.0
+        # self.best_AOS_score = 0.0
 
         wandb.watch(self.model)
         for epoch in tqdm(range(self.n_epoch), desc='epoch'):
@@ -167,109 +163,97 @@ class trainer():
             for batch_idx, batch in enumerate(self.train_loader):
                 
                 self.optim.zero_grad()
-                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions, is_possible, cls_index = self.prepare_data(batch)
+                feat, src_key_padding_mask, segment_ids, position_ids, is_possible, cls_index = self.prepare_data(batch)
 
-                total_loss, start_logits, end_logits = self.model(
+                total_loss, cls_logits = self.model(
                     feat_embs=feat, 
                     position_ids=position_ids,
                     segment_ids=segment_ids, 
                     src_key_padding_mask=src_key_padding_mask,
-                    start_positions=start_positions,
-                    end_positions=end_positions,
                     cls_index=cls_index,
                     is_possible=is_possible
                 )
 
                 total_loss.backward()
                 self.optim.step()
-            
-                pred_start_prob = softmax(start_logits, dim=1)
-                pred_end_prob = softmax(end_logits, dim=1)
-                pred_start_positions = torch.argmax(pred_start_prob, dim=1)
-                pred_end_positions = torch.argmax(pred_end_prob, dim=1)
-
-                F1 = Frame_F1_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-                AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-                
-
+                pred = torch.sigmoid(cls_logits)
+                for i in range(len(pred)):
+                    if pred[i] > 0.5: 
+                        pred[i] = 1
+                    else: 
+                        pred[i] = 0
+                correct = pred == is_possible
+                acc = torch.sum(correct) / len(correct)
                 # TODO: logger
-                if batch_idx % self.log_interval == 0:
-                    if total_loss < 1e10:
-                        wandb.log({'train_total_loss': total_loss})#, 'train_cls_loss': cls_loss, 'train_start_loss': start_loss, 'train_end_loss': end_loss})
-
-                    wandb.log({'train_f1': F1})
-                    wandb.log({'train_AOS': AOS})
-                    print('-')
-                    print(pred_start_positions)
-                    print(start_positions)
-                    print(pred_end_positions)
-                    print(end_positions)
-                    print(f'[INFO]  train_total_loss: {total_loss}, train_f1: {F1}, train_AOS: {AOS}')
-                del feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions
+                wandb.log({'train_cls_loss': total_loss})
+                wandb.log({'train_acc': acc})
+                print(f'[INFO]  train_cls_loss: {total_loss}, acc:{acc}')
+                del feat, src_key_padding_mask, segment_ids, position_ids
                 # del total_loss, cls_loss, start_loss, end_loss, start_logits, end_logits
                 self.step  = self.step + 1
 
             # validation
             # self.validate()
                 
-        print(f'[INFO]   Best F1 score: {self.best_F1_score}')
-        print(f'[INFO]   Best AOS score: {self.best_AOS_score}')
+        # print(f'[INFO]   Best F1 score: {self.best_F1_score}')
+        # print(f'[INFO]   Best AOS score: {self.best_AOS_score}')
 
 
 
-    # def validate(self): 
-    #     self.model.eval()
-    #     dev_Frame_F1_scores, dev_AOS_scores = [], []
-    #     print(f'[INFO]   validation at step {self.step}')
-    #     for i, data in tqdm(enumerate(self.dev_loader)):
-    #         feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions, is_possible = self.prepare_data(data)
+    def validate(self): 
+        self.model.eval()
+        dev_Frame_F1_scores, dev_AOS_scores = [], []
+        print(f'[INFO]   validation at step {self.step}')
+        for i, data in tqdm(enumerate(self.dev_loader)):
+            feat, src_key_padding_mask, segment_ids, position_ids, is_possible, cls_index = self.prepare_data(data)
             
-    #         with torch.no_grad():
-    #             start_top_log_probs, start_top_index, end_top_log_probs, end_top_index = self.model(
-    #             feat_embs=feat, 
-    #             position_ids=position_ids,
-    #             segment_ids=segment_ids, 
-    #             src_key_padding_mask=src_key_padding_mask,
-    #             )
-            
-    #         pred_start_positions = start_top_index[:, 0]
-    #         pred_end_positions = end_top_index[:, 0]
-    #         F1 = Frame_F1_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-    #         AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
-    #         dev_Frame_F1_scores.append(F1)
-    #         dev_AOS_scores.append(AOS)
-        
-    #     dev_Frame_F1_score = sum(dev_Frame_F1_scores) / len(dev_Frame_F1_scores)
-    #     dev_AOS_score = sum(dev_AOS_scores) / len(dev_AOS_scores)
-        
-    #     wandb.log({'dev_f1': dev_Frame_F1_score})
-    #     wandb.log({'dev_AOS': dev_AOS_score})
-    #     print(f'[INFO]  dev_f1: {dev_Frame_F1_score}, dev_AOS: {dev_AOS_score}')
+            with torch.no_grad():
+                total_loss, cls_logits = self.model(
+                    feat_embs=feat, 
+                    position_ids=position_ids,
+                    segment_ids=segment_ids, 
+                    src_key_padding_mask=src_key_padding_mask,
+                    cls_index=cls_index,
+                    is_possible=is_possible
+                )
 
-    #     # save ckpt if get better score
-    #     if dev_Frame_F1_score > self.best_F1_score: 
-    #         ckpt_path = os.path.join(self.ckptdir, 'best_F1_score.pt')
-    #         full_dict = {
-    #             'model': self.model.state_dict(),
-    #             'optimizer': self.optim.state_dict(),
-    #             'epoch': epoch,
-    #             'f1_score': dev_Frame_F1_score,
-    #             'AOS_score':dev_AOS_score
-    #         }
-    #         torch.save(full_dict, ckpt_path)
-    #         self.best_F1_score = dev_Frame_F1_score
+                pred = torch.sigmoid(cls_logits)
+                for i in range(len(pred)):
+                    if pred[i] > 0.5: 
+                        pred[i] = 1
+                    else: 
+                        pred[i] = 0
+                correct = pred == is_possible
+                acc = torch.sum(correct) / len(correct)
+                # TODO: logger
+                wandb.log({'dev_cls_loss': total_loss})
+                wandb.log({'dev_acc': acc})
         
-    #     if dev_AOS_score > self.best_AOS_score: 
-    #         ckpt_path = os.path.join(self.ckptdir, 'best_AOS_score.pt')
-    #         full_dict = {
-    #             'model': self.model.state_dict(),
-    #             'optimizer': self.optim.state_dict(),
-    #             'epoch': epoch,
-    #             'f1_score': dev_Frame_F1_score,
-    #             'AOS_score':dev_AOS_score
-    #         }
-    #         torch.save(full_dict, ckpt_path)
-    #         self.best_AOS_score = dev_AOS_score
+        
+        # save ckpt if get better score
+        if acc > self.best_F1_score: 
+            ckpt_path = os.path.join(self.ckptdir, 'best_F1_score.pt')
+            full_dict = {
+                'model': self.model.state_dict(),
+                'optimizer': self.optim.state_dict(),
+                'epoch': epoch,
+                'f1_score': dev_Frame_F1_score,
+                'AOS_score':dev_AOS_score
+            }
+            torch.save(full_dict, ckpt_path)
+            self.best_F1_score = dev_Frame_F1_score
+        
+        if dev_AOS_score > self.best_AOS_score: 
+            ckpt_path = os.path.join(self.ckptdir, 'best_AOS_score.pt')
+            full_dict = {
+                'model': self.model.state_dict(),
+                'optimizer': self.optim.state_dict(),
+                'epoch': epoch,
+                'f1_score': dev_Frame_F1_score,
+                'AOS_score':dev_AOS_score
+            }
+            torch.save(full_dict, ckpt_path)
+            self.best_AOS_score = dev_AOS_score
 
 
 
