@@ -223,6 +223,7 @@ def Frame_F1_score(pred_starts, pred_ends, gold_starts, gold_ends):
     else:
         return 0
 
+# +
 def AOS_score(pred_starts, pred_ends, gold_starts, gold_ends):
     AOSs = []
     not_count = 0
@@ -241,3 +242,19 @@ def AOS_score(pred_starts, pred_ends, gold_starts, gold_ends):
         return sum(AOSs) / (len(pred_starts) - not_count)
     else: 
         return 0
+    
+def aggregate_dev_result(dup, metric):
+    aggregate_result = []
+    for i in range(len(dup)):
+        if not dup[i]:
+            if len(buff) == 0:
+                aggregate_result.append(metric[i])
+            else: 
+                aggregate_result.append(max(buffer))
+
+            buff = []  # clear buffer
+
+        else: 
+            buff.append(metric[i])
+    
+    return sum(aggregate_result) / len(aggregate_result)

@@ -8,9 +8,9 @@ import torch
 from torch.utils.data import DataLoader
 # from model import TransformerQA
 from model_xlent import TransformerQA
-# from data import SpokenSquadTrainDataset, train_collate_fn
-from data_passage import SpokenSquadTrainDataset, train_collate_fn
-from utils import Frame_F1_score, AOS_score
+# from data import SpokenSquadDataset, train_collate_fn
+from data_passage import SpokenSquadDataset, train_collate_fn, dev_collate_fn
+from utils import Frame_F1_score, AOS_score, aggregate_dev_result
 from tqdm import tqdm
 from torch.nn.functional import softmax
 from torch.nn.utils.rnn import pad_sequence
@@ -49,20 +49,20 @@ class trainer():
 
     def load_data(self):
         
-        self.train_dataset = SpokenSquadTrainDataset(
+        self.train_dataset = SpokenSquadDataset(
             self.paras.upstream,
             self.paras.n_worker,
             self.device, 
-            self.config['split'][0],
+            self.config['split'][0],  # mode
             **self.config['data']
         )
-        # self.dev_dataset = SpokenSquadDataset(
-        #     self.paras.upstream,
-        #     self.paras.n_worker,
-        #     self.device, 
-        #     self.config['split'][1],
-        #     **self.config['data']
-        # )
+        self.dev_dataset = SpokenSquadDataset(
+            self.paras.upstream,
+            self.paras.n_worker,
+            self.device, 
+            self.config['split'][1],
+            **self.config['data']
+        )
 
         self.train_loader = DataLoader(
             self.train_dataset, 
@@ -71,16 +71,20 @@ class trainer():
             collate_fn=train_collate_fn, 
             num_workers=self.paras.n_worker
         )
-        # self.dev_loader = DataLoader(
-        #     self.dev_dataset, 
-        #     batch_size=1,
-        #     shuffle=False, 
-        #     collate_fn=collate_fn,
-        #     num_workers=self.paras.n_worker
-        # )
+        self.dev_loader = DataLoader(
+            self.dev_dataset, 
+            batch_size=1,
+            shuffle=False, 
+            collate_fn=dev_collate_fn,
+            num_workers=self.paras.n_worker
+        )
     
-    def prepare_data(self, data):
-        question_wavs, context_wavs, start_positions, end_positions = data
+    def prepare_data(self, data, mode):
+        if mode == 'train':
+            question_wavs, context_wavs, start_positions, end_positions = data
+        else: 
+            question_wavs, context_wavs, start_positions, end_positions, dup_idx = data
+            
         question_wavs = self.to_device(question_wavs)
         context_wavs = self.to_device(context_wavs)   
 
@@ -108,12 +112,9 @@ class trainer():
             with torch.no_grad():
                 # TODO: check whether passage is too long extractor
                 # if so, chunk the input to same length and than feed to extractor as a batch?
-                # every 200000 data point a chunk, the remaining part would be extracted individually 
+                # every 200000 data point a chunk
                 context_wavs_lists = list(torch.split(context_wavs[i], CHUNK_LENGTH, dim=0))
-                # context_wavs_list = context_wavs_lists[:-1]
-                # remain = context_wavs_lists[-1]
                 context_feature_main = self.extracter(context_wavs_lists)
-                # context_feature_remain = self.extracter([remain])
                 # concat
                 for idx, chunk in enumerate(context_feature_main['default']):
                     if idx == 0: 
@@ -121,7 +122,6 @@ class trainer():
                     else: 
                         context_feature = torch.cat([context_feature, chunk], dim=0)         
 
-                # context_feature = torch.cat([context_feature, context_feature_remain['default'][0]], dim=0)         
                 question_feature = self.extracter([question_wavs[i]])
                 question_feature = question_feature['default'][0]
                 
@@ -147,22 +147,31 @@ class trainer():
         position_ids = pad_sequence(position_ids, batch_first=True, padding_value=0) 
         new_start_positions = torch.tensor(new_start_positions, dtype=torch.long)
         new_end_positions = torch.tensor(new_end_positions, dtype=torch.long)
-
-        return (
-            qa_pair_feats.to(self.device), 
-            src_key_padding_masks.to(self.device), 
-            segment_ids.to(self.device), 
-            position_ids.to(self.device), 
-            new_start_positions.to(self.device), 
-            new_end_positions.to(self.device)
-        )
+        
+        if mode == 'train':
+            return (
+                qa_pair_feats.to(self.device), 
+                src_key_padding_masks.to(self.device), 
+                segment_ids.to(self.device), 
+                position_ids.to(self.device), 
+                new_start_positions.to(self.device), 
+                new_end_positions.to(self.device)
+            )
+        else: 
+            return (
+                qa_pair_feats.to(self.device), 
+                src_key_padding_masks.to(self.device), 
+                segment_ids.to(self.device), 
+                position_ids.to(self.device), 
+                new_start_positions.to(self.device), 
+                new_end_positions.to(self.device),
+                dup_idx,
+            )
 
 
     def set_model(self):
         self.model = TransformerQA(**self.config['model'])
         self.model.to(self.device)
-        # print(self.model)
-
 
         self.optim = eval('torch.optim.' + self.config['hparas']['optimizer'])(
                         self.model.parameters(), 
@@ -174,14 +183,16 @@ class trainer():
         self.best_F1_score = 0.0
         self.best_AOS_score = 0.0
 
+        self.mode = 'train'
         wandb.watch(self.model)
         for epoch in tqdm(range(self.n_epoch), desc='epoch'):
             # training
             self.model.train()
+            
             for batch_idx, batch in enumerate(self.train_loader):
                 
                 self.optim.zero_grad()
-                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch)
+                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch, self.mode)
 
                 loss, start_logits, end_logits = self.model(
                     feat_embs=feat, 
@@ -210,14 +221,19 @@ class trainer():
                     wandb.log({'train_f1': F1})
                     wandb.log({'train_AOS': AOS})
                     print(f'[INFO]  train_loss: {loss}, train_f1: {F1}, train_AOS: {AOS}')
+                    print(pred_start_positions)
+                    print(start_positions)
+                    print(pred_end_positions)
+                    print(end_positions)
+                    
                 del feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions
                 del loss, start_logits, end_logits
-
-                if self.step % self.valid_interval == 0 & self.step != 0:
-                    # validation
-                    self.validate()
+            
+            # validation
+            if self.step != 0:
+                self.validate()
                 
-                self.step  = self.step + 1
+            self.step  = self.step + 1
         
         print(f'[INFO]   Best F1 score: {self.best_F1_score}')
         print(f'[INFO]   Best AOS score: {self.best_AOS_score}')
@@ -226,10 +242,12 @@ class trainer():
 
     def validate(self): 
         self.model.eval()
-        dev_Frame_F1_scores, dev_AOS_scores = [], []
+        self.mode = 'dev'
+        
+        dev_Frame_F1_scores, dev_AOS_scores, dup_idxs = [], [], []
         print(f'[INFO]   validation at step {self.step}')
         for i, data in tqdm(enumerate(self.dev_loader)):
-            feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(data)
+            feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions, dup_idx = self.prepare_data(data, self.mode)
             
             with torch.no_grad():
                 start_top_log_probs, start_top_index, end_top_log_probs, end_top_index = self.model(
@@ -245,16 +263,19 @@ class trainer():
             AOS = AOS_score(pred_start_positions, pred_end_positions, start_positions, end_positions)
             dev_Frame_F1_scores.append(F1)
             dev_AOS_scores.append(AOS)
+            dup_idxs = dup_idxs + dup_idx
         
-        dev_Frame_F1_score = sum(dev_Frame_F1_scores) / len(dev_Frame_F1_scores)
-        dev_AOS_score = sum(dev_AOS_scores) / len(dev_AOS_scores)
+        print(dup_idxs)
         
-        wandb.log({'dev_f1': dev_Frame_F1_score})
-        wandb.log({'dev_AOS': dev_AOS_score})
-        print(f'[INFO]  dev_f1: {dev_Frame_F1_score}, dev_AOS: {dev_AOS_score}')
+        agg_dev_Frame_F1_score = aggregate_dev_result(dup_idxs, dev_Frame_F1_scores)
+        agg_dev_AOS_score = aggregate_dev_result(dup_idxs, dev_AOS_score)
+        
+        wandb.log({'dev_f1': agg_dev_Frame_F1_score})
+        wandb.log({'dev_AOS': agg_dev_AOS_score})
+        print(f'[INFO]  dev_f1: {agg_dev_Frame_F1_score}, dev_AOS: {agg_dev_AOS_score}')
 
         # save ckpt if get better score
-        if dev_Frame_F1_score > self.best_F1_score: 
+        if agg_dev_Frame_F1_score > self.best_F1_score: 
             ckpt_path = os.path.join(self.ckptdir, 'best_F1_score.pt')
             full_dict = {
                 'model': self.model.state_dict(),
@@ -264,19 +285,19 @@ class trainer():
                 'AOS_score':dev_AOS_score
             }
             torch.save(full_dict, ckpt_path)
-            self.best_F1_score = dev_Frame_F1_score
+            self.best_F1_score = agg_dev_Frame_F1_score
         
-        if dev_AOS_score > self.best_AOS_score: 
+        if agg_dev_AOS_score > self.best_AOS_score: 
             ckpt_path = os.path.join(self.ckptdir, 'best_AOS_score.pt')
             full_dict = {
                 'model': self.model.state_dict(),
                 'optimizer': self.optim.state_dict(),
                 'epoch': epoch,
-                'f1_score': dev_Frame_F1_score,
-                'AOS_score':dev_AOS_score
+                'f1_score': agg_dev_Frame_F1_score,
+                'AOS_score':agg_dev_AOS_score
             }
             torch.save(full_dict, ckpt_path)
-            self.best_AOS_score = dev_AOS_score
+            self.best_AOS_score = agg_dev_AOS_score
 
 
 

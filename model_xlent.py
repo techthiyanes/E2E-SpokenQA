@@ -26,7 +26,8 @@ class TransformerQA(nn.Module):
                 segment_type_size=segment_type_size, 
                 hidden_size=hidden_size, 
                 hidden_dropout_prob=hidden_dropout_prob, 
-                layer_norm_eps=layer_norm_eps)
+                layer_norm_eps=layer_norm_eps, 
+        )
 
         encoder_layers = TransformerEncoderLayer(
                     hidden_size, num_attention_heads, intermediate_size, hidden_dropout_prob,

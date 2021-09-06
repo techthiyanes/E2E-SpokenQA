@@ -24,61 +24,70 @@ def reader(fname):
 
 
 
-class SpokenSquadTrainDataset(Dataset): 
-    def __init__(self, upstream: str, n_worker: int, device: str, mode: str, file_dir: str, file_path: str, hash2question_path: str, ext: str, feature_selection: int, downsample_factor: int):
+class SpokenSquadDataset(Dataset): 
+    def __init__(self, upstream: str, n_worker: int, device: str, mode: str, segment_file_dir: str, passage_file_dir: str, file_path: str, hash2question_path: str, ext: str, feature_selection: int, downsample_factor: int):
         self.mode = mode
         if self.mode == 'train':
-            file_dir = file_dir[0]
+            segment_file_dir = segment_file_dir[0]
+            passage_file_dir = passage_file_dir[0]
             file_path = file_path[0]
             hash2question_path = hash2question_path[0]
         else: 
-            file_dir = file_dir[1]
+            segment_file_dir = segment_file_dir[1]
+            passage_file_dir = passage_file_dir[1]
             file_path = file_path[1]
             hash2question_path = hash2question_path[1]
         
-        self.question_list, self.context_list, self.starts, self.ends = self.read_data(
-            file_dir, file_path, hash2question_path, n_worker, ext
+        self.question_list, self.context_list, self.starts, self.ends, self.dup_idx = self.read_data(
+            segment_file_dir, passage_file_dir, file_path, hash2question_path, n_worker, ext
         )
 
 
     def read_file(self, file_path, hash2question_path):
         df = pd.read_csv(file_path)
-        # remove duplicate answer 
-        dup = df.duplicated(subset=['hash']) & df.duplicated(subset=['utterance'])
-        dup = dup.values
-        too_long = df['new_end'].values >= MAX_LENGTH
-        union = dup | too_long
-        drop_idx = []
-        for i in range(len(union)):
-            if union[i]: 
-                drop_idx.append(i)
-
-        print(f'[INFO]  drop {len(drop_idx)} samples due to duplicated or longer than {MAX_LENGTH}')
-        df = df.drop(drop_idx)
-
+                
         with open(hash2question_path, 'r') as f:
             h2q = json.load(f)
         df['question'] = df['hash'].apply(lambda x: h2q[x])
         
+        
+        if self.mode == 'train':
+            too_long = df['new_end'].values >= MAX_LENGTH
+            drop_idx = []
+            for i in range(len(too_long)):
+                if too_long[i]: 
+                    drop_idx.append(i)
+
+            print(f'[INFO]  drop {len(drop_idx)} samples due to ans span idx longer than {MAX_LENGTH}')
+            df = df.drop(drop_idx)
+            dup = None
+
+            
+        else: 
+            # different answer annotators 
+            dup = df.duplicated(subset=['hash'], keep='last').values
+            
         return(
             df['question'].values.tolist(),
             df['context_id'].values.tolist(),
             df['new_start'].values.tolist(),
             df['new_end'].values.tolist(),
+            dup,
         )
-
-    def read_data(self, file_dir, file_path, hash2question_path, n_worker, ext='mp3', sr=16000):
+        
+    def read_data(self, segment_file_dir, passage_file_dir, file_path, hash2question_path, n_worker, ext='mp3', sr=16000):
         question_wavs, context_wavs = [], []
-        question_list, context_list, starts, ends = self.read_file(file_path, hash2question_path)
+        question_list, context_list, starts, ends, dup_idx = self.read_file(file_path, hash2question_path)
 
-        question_list = [file_dir + '/' + question_list[i] + '.' + ext for i in range(len(question_list))]
-        context_list = ['/home/daniel094144/Daniel/SpokenQA/train_passage_mp3' + '/' + 'context-' + context_list[i] + '.' + ext for i in range(len(context_list))]
+        question_list = [segment_file_dir + '/' + question_list[i] + '.' + ext for i in range(len(question_list))]
+        context_list = [passage_file_dir + '/' + 'context-' + context_list[i] + '.' + ext for i in range(len(context_list))]
 
         return(
             question_list,
             context_list,
             starts,
             ends,
+            dup_idx,
         )
 
     def sec2ind(self, time):
@@ -98,14 +107,23 @@ class SpokenSquadTrainDataset(Dataset):
         return len(self.starts)
 
     def __getitem__(self, idx):
+        if self.mode == 'train':
+            return (
+                self.question_list[idx],
+                self.context_list[idx],
+                self.sec2ind(self.starts[idx]),
+                self.sec2ind(self.ends[idx]),
+            )
+        else: 
+            return (
+                self.question_list[idx],
+                self.context_list[idx],
+                self.sec2ind(self.starts[idx]),
+                self.sec2ind(self.ends[idx]),
+                self.dup_idx[idx],
+            )            
 
-        return (
-            self.question_list[idx],
-            self.context_list[idx],
-            self.sec2ind(self.starts[idx]),
-            self.sec2ind(self.ends[idx]),
-        )
-
+# +
 def train_collate_fn(batch):
     question_list, context_list, start_idx, end_idx = zip(*batch)
     question_wavs, context_wavs = [], []
@@ -113,4 +131,12 @@ def train_collate_fn(batch):
     question_wavs = [reader(question_file) for question_file in question_list]
     context_wavs = [reader(context_file) for context_file in context_list]
     return question_wavs, context_wavs, start_idx, end_idx
+
+def dev_collate_fn(batch):
+    question_list, context_list, start_idx, end_idx, dup_idx = zip(*batch)
+    question_wavs, context_wavs = [], []
+    # TODO: mutliprocessing
+    question_wavs = [reader(question_file) for question_file in question_list]
+    context_wavs = [reader(context_file) for context_file in context_list]
+    return question_wavs, context_wavs, start_idx, end_idx, list(dup_idx)
 
