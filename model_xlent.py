@@ -72,7 +72,7 @@ class TransformerQA(nn.Module):
             loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
             start_loss = loss_fct(start_logits, start_positions)
             end_loss = loss_fct(end_logits, end_positions)
-            total_loss = (start_loss + end_loss) / 2
+            total_loss = 0.6 * start_loss + 0.4 * end_loss
 
             return total_loss, start_logits, end_logits
 

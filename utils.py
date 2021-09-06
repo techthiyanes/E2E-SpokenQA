@@ -245,12 +245,13 @@ def AOS_score(pred_starts, pred_ends, gold_starts, gold_ends):
     
 def aggregate_dev_result(dup, metric):
     aggregate_result = []
+    buff = []
     for i in range(len(dup)):
         if not dup[i]:
             if len(buff) == 0:
                 aggregate_result.append(metric[i])
             else: 
-                aggregate_result.append(max(buffer))
+                aggregate_result.append(max(buff))
 
             buff = []  # clear buffer
 

@@ -9,10 +9,10 @@ data:
   downsample_factor: 8
 
 hparas: 
-  n_epoch: 20
+  n_epoch: 10
   batch_size: 64
   optimizer: 'AdamW'
-  lr: 5e-4
+  lr: 1e-4
 
 model: 
   hidden_size: 768

@@ -179,20 +179,19 @@ class trainer():
                     )
     
     def exec(self):
-        self.step = 0
         self.best_F1_score = 0.0
         self.best_AOS_score = 0.0
-
-        self.mode = 'train'
+        
+        
         wandb.watch(self.model)
         for epoch in tqdm(range(self.n_epoch), desc='epoch'):
-            # training
+            self.epoch = epoch
             self.model.train()
             
             for batch_idx, batch in enumerate(self.train_loader):
                 
                 self.optim.zero_grad()
-                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch, self.mode)
+                feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions = self.prepare_data(batch, 'train')
 
                 loss, start_logits, end_logits = self.model(
                     feat_embs=feat, 
@@ -230,11 +229,9 @@ class trainer():
                 del loss, start_logits, end_logits
             
             # validation
-            if self.step != 0:
+            if self.epoch != 0:
                 self.validate()
-                
-            self.step  = self.step + 1
-        
+
         print(f'[INFO]   Best F1 score: {self.best_F1_score}')
         print(f'[INFO]   Best AOS score: {self.best_AOS_score}')
 
@@ -242,12 +239,11 @@ class trainer():
 
     def validate(self): 
         self.model.eval()
-        self.mode = 'dev'
         
         dev_Frame_F1_scores, dev_AOS_scores, dup_idxs = [], [], []
-        print(f'[INFO]   validation at step {self.step}')
+        print(f'[INFO]   validation at epoch {self.epoch}')
         for i, data in tqdm(enumerate(self.dev_loader)):
-            feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions, dup_idx = self.prepare_data(data, self.mode)
+            feat, src_key_padding_mask, segment_ids, position_ids, start_positions, end_positions, dup_idx = self.prepare_data(data, 'dev')
             
             with torch.no_grad():
                 start_top_log_probs, start_top_index, end_top_log_probs, end_top_index = self.model(
@@ -265,10 +261,8 @@ class trainer():
             dev_AOS_scores.append(AOS)
             dup_idxs = dup_idxs + dup_idx
         
-        print(dup_idxs)
-        
         agg_dev_Frame_F1_score = aggregate_dev_result(dup_idxs, dev_Frame_F1_scores)
-        agg_dev_AOS_score = aggregate_dev_result(dup_idxs, dev_AOS_score)
+        agg_dev_AOS_score = aggregate_dev_result(dup_idxs, dev_AOS_scores)
         
         wandb.log({'dev_f1': agg_dev_Frame_F1_score})
         wandb.log({'dev_AOS': agg_dev_AOS_score})
@@ -280,9 +274,9 @@ class trainer():
             full_dict = {
                 'model': self.model.state_dict(),
                 'optimizer': self.optim.state_dict(),
-                'epoch': epoch,
-                'f1_score': dev_Frame_F1_score,
-                'AOS_score':dev_AOS_score
+                'epoch': self.epoch,
+                'f1_score': agg_dev_Frame_F1_score,
+                'AOS_score':agg_dev_AOS_score
             }
             torch.save(full_dict, ckpt_path)
             self.best_F1_score = agg_dev_Frame_F1_score
@@ -292,7 +286,7 @@ class trainer():
             full_dict = {
                 'model': self.model.state_dict(),
                 'optimizer': self.optim.state_dict(),
-                'epoch': epoch,
+                'epoch': self.epoch,
                 'f1_score': agg_dev_Frame_F1_score,
                 'AOS_score':agg_dev_AOS_score
             }
